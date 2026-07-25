@@ -1,0 +1,21 @@
+name: Sync LeetCode Submissions
+
+on:
+  schedule:
+    # 每天北京时间 16:00 (UTC 8:00) 自动同步，可根据需要修改
+    - cron: '0 8 * * *'
+  workflow_dispatch:  # 支持手动触发
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Sync LeetCode submissions
+        uses: joshcai/leetcode-sync@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          leetcode-csrf-token: ${{ secrets.LEETCODE_CSRF_TOKEN }}
+          leetcode-session: ${{ secrets.LEETCODE_SESSION }}
