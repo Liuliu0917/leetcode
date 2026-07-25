@@ -66,7 +66,6 @@ def get_all_submissions(session: str, csrf: str, limit: int = 20) -> list:
         submissions {
           id
           title
-          titleSlug
           timestamp
           statusDisplay
           lang
@@ -155,7 +154,8 @@ def main():
         question_id = q.get("questionId", "0000")
         problem_title = q.get("translatedTitle") or title
 
-        filename = sanitize_filename(f"{question_id}-{sub['titleSlug']}.{ext}")
+        title_slug = q.get("titleSlug") or sub.get("title", "").replace(" ", "-")
+        filename = sanitize_filename(f"{question_id}-{title_slug}.{ext}")
         filepath = output_dir / filename
         filepath.parent.mkdir(parents=True, exist_ok=True)
 
