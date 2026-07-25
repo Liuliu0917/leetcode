@@ -1,5 +1,5 @@
 """
-LeetCode CN 提交同步脚本 v4 - 自动探测正确的 API 字段
+LeetCode CN 提交同步脚本 v5 - 最终版
 """
 import json
 import os
@@ -35,133 +35,50 @@ def graphql_request(session: str, csrf: str, query: str, variables: dict) -> dic
     resp = requests.post(LEETCODE_GRAPHQL, json={"query": query, "variables": variables},
                          headers=headers, cookies=cookies, timeout=30)
     if resp.status_code != 200:
-        return {"_error": f"HTTP {resp.status_code}", "_body": resp.text[:300]}
+        print(f"    HTTP {resp.status_code}: {resp.text[:300]}", file=sys.stderr)
+        resp.raise_for_status()
     data = resp.json()
     if "errors" in data:
-        return {"_error": str(data["errors"])}
+        print(f"    GraphQL 错误: {data['errors']}", file=sys.stderr)
+        return {}
     return data.get("data", {})
 
 
-def try_fields(session, csrf, user_slug):
-    """尝试多种可能的 GraphQL 查询，找到可用的提交列表字段"""
-    tests = [
-        # 方案 A: submitted 页面使用的查询
-        {
-            "name": "submissionList (offset/limit)",
-            "query": """
-            query submissionList($offset: Int!, $limit: Int!) {
-              submissionList(offset: $offset, limit: $limit) {
-                submissions {
-                  id
-                  title
-                  titleSlug
-                  timestamp
-                  statusDisplay
-                  lang
-                }
-                hasNext
-              }
-            }
-            """,
-            "vars": {"offset": 0, "limit": 5},
-        },
-        # 方案 B: userProfileQuestions
-        {
-            "name": "recentSubmissionList (userSlug)",
-            "query": """
-            query recentSubmissionList($userSlug: String!) {
-              recentSubmissionList(userSlug: $userSlug) {
-                id
-                title
-                titleSlug
-                timestamp
-                statusDisplay
-                lang
-              }
-            }
-            """,
-            "vars": {"userSlug": user_slug},
-        },
-        # 方案 C: progress 页面使用的
-        {
-            "name": "progressSubmissionList",
-            "query": """
-            query progressSubmissionList($userSlug: String!) {
-              progressSubmissionList(userSlug: $userSlug, limit: 5, offset: 0) {
-                submissions {
-                  id
-                  title
-                  titleSlug
-                  timestamp
-                  statusDisplay
-                  lang
-                }
-              }
-            }
-            """,
-            "vars": {"userSlug": user_slug},
-        },
-        # 方案 D: 不带参数
-        {
-            "name": "submissionList (no args)",
-            "query": """
-            query {
-              submissionList(offset: 0, limit: 5) {
-                submissions {
-                  id title titleSlug timestamp statusDisplay lang
-                }
-                hasNext
-              }
-            }
-            """,
-            "vars": {},
-        },
-        # 方案 E: 直接从 userStatus 里获取
-        {
-            "name": "userPublicProfile + recentSubmission",
-            "query": """
-            query userPublicProfile($userSlug: String!) {
-              userProfilePublicProfile(userSlug: $userSlug) {
-                submissionProgress {
-                  totalSubmissions
-                }
-              }
-            }
-            """,
-            "vars": {"userSlug": user_slug},
-        },
-    ]
-
-    for test in tests:
-        print(f"  尝试: {test['name']}...", end=" ")
-        result = graphql_request(session, csrf, test["query"], test["vars"])
-        if "_error" in result:
-            print(f"❌ {result['_error'][:100]}")
-        else:
-            print(f"✓ 返回: {json.dumps(result, ensure_ascii=False)[:150]}")
-        time.sleep(0.5)
-
-    return []
-
-
-def get_user_slug(session: str, csrf: str) -> str:
-    query = """
+def verify_login(session: str, csrf: str) -> str:
+    data = graphql_request(session, csrf, """
     query globalData {
-      userStatus {
-        userSlug
-        isSignedIn
-        username
+      userStatus { userSlug isSignedIn username }
+    }
+    """, {})
+    u = data.get("userStatus", {})
+    if not u or not u.get("isSignedIn"):
+        print("错误: 未登录或 Cookie 已过期", file=sys.stderr)
+        sys.exit(1)
+    print(f"  已登录: {u.get('username')}")
+    return u.get("userSlug", "")
+
+
+def get_all_submissions(session: str, csrf: str, limit: int = 20) -> list:
+    """获取最近的 Accepted 提交"""
+    query = """
+    query submissionList($offset: Int!, $limit: Int!) {
+      submissionList(offset: $offset, limit: $limit) {
+        submissions {
+          id
+          title
+          titleSlug
+          timestamp
+          statusDisplay
+          lang
+        }
+        hasNext
       }
     }
     """
-    data = graphql_request(session, csrf, query, {})
-    user_status = data.get("userStatus", {})
-    if not user_status or not user_status.get("isSignedIn"):
-        print("错误: 未登录或 Cookie 已过期", file=sys.stderr)
-        sys.exit(1)
-    slug = user_status.get("userSlug", "")
-    print(f"  已登录: {user_status.get('username')} (slug: {slug})")
-    return slug
+    data = graphql_request(session, csrf, query, {"offset": 0, "limit": limit})
+    sl = data.get("submissionList", {})
+    subs = sl.get("submissions", [])
+    return [s for s in subs if s.get("statusDisplay") == "Accepted"]
 
 
 def get_submission_code(session: str, csrf: str, submission_id: int) -> dict | None:
@@ -203,18 +120,60 @@ def main():
         print("错误: 缺少环境变量", file=sys.stderr)
         sys.exit(1)
 
-    print("=== LeetCode CN 同步 v4 ===")
+    print("=== LeetCode CN 同步 v5 ===")
 
-    # 1. 验证登录
     print("\n[1] 验证登录...")
-    user_slug = get_user_slug(session, csrf)
+    user_slug = verify_login(session, csrf)
 
-    # 2. 探测可用 API
-    print("\n[2] 探测可用 API 字段...")
-    submissions = try_fields(session, csrf, user_slug)
+    synced_ids = load_synced_ids(sync_file)
+    print(f"[2] 已同步 {len(synced_ids)} 条记录")
 
-    print(f"\n获取到 {len(submissions)} 条记录")
-    print("\n=== 诊断完成 ===")
+    print("\n[3] 获取最近提交...")
+    submissions = get_all_submissions(session, csrf)
+    print(f"    获取到 {len(submissions)} 条 Accepted 提交")
+
+    print("\n[4] 下载解题代码...")
+    new_count = 0
+
+    for sub in submissions:
+        sub_id = sub["id"]
+        if str(sub_id) in synced_ids:
+            continue
+
+        title = sub["title"]
+        lang = sub.get("lang", "unknown")
+        ext = LANG_EXT.get(lang.lower(), lang.lower())
+        print(f"    [{lang}] {title}")
+
+        detail = get_submission_code(session, csrf, int(sub_id))
+        if not detail or not detail.get("code"):
+            print(f"      ⚠ 无法获取代码，跳过")
+            continue
+
+        code = detail["code"]
+        q = detail.get("question", {}) or {}
+        question_id = q.get("questionId", "0000")
+        problem_title = q.get("translatedTitle") or title
+
+        filename = sanitize_filename(f"{question_id}-{sub['titleSlug']}.{ext}")
+        filepath = output_dir / filename
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+
+        header = (
+            f"// 题目: {problem_title}\n"
+            f"// 题号: {question_id}\n"
+            f"// 语言: {lang}\n"
+            f"// 提交时间: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(sub['timestamp']))}\n\n"
+        )
+
+        filepath.write_text(header + code, encoding="utf-8")
+        synced_ids.add(str(sub_id))
+        new_count += 1
+        print(f"      ✓ → {filename}")
+        time.sleep(1)
+
+    save_synced_ids(sync_file, synced_ids)
+    print(f"\n=== 同步完成: 新增 {new_count} 条 ===")
 
 
 if __name__ == "__main__":
