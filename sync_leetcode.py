@@ -82,10 +82,10 @@ def get_all_submissions(session: str, csrf: str, limit: int = 20) -> list:
 
 def get_submission_code(session: str, csrf: str, submission_id: int) -> dict | None:
     query = """
-    query submissionDetails($submissionId: Int!) {
+    query submissionDetails($submissionId: ID!) {
       submissionDetail(submissionId: $submissionId) {
         code
-        lang { name }
+        lang
         question { questionId title titleSlug translatedTitle }
       }
     }
@@ -140,9 +140,8 @@ def main():
             continue
 
         title = sub["title"]
-        lang = sub.get("lang", "unknown")
-        ext = LANG_EXT.get(lang.lower(), lang.lower())
-        print(f"    [{lang}] {title}")
+        lang_short = sub.get("lang", "unknown")
+        print(f"    [{lang_short}] {title}")
 
         detail = get_submission_code(session, csrf, int(sub_id))
         if not detail or not detail.get("code"):
@@ -151,6 +150,9 @@ def main():
 
         code = detail["code"]
         q = detail.get("question", {}) or {}
+        # lang 在 submissionDetail 中是字符串(如 "cpp")，在 list 中可能是 "C++"
+        lang = detail.get("lang") or lang_short
+        ext = LANG_EXT.get(lang.lower(), lang.lower())
         question_id = q.get("questionId", "0000")
         problem_title = q.get("translatedTitle") or title
 
