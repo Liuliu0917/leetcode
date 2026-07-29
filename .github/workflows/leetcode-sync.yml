@@ -33,12 +33,12 @@ jobs:
 
       - name: Commit and push changes
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "Liuliu0917"
+          git config user.email "Liuliu0917@users.noreply.github.com"
           git add solutions/
           if git diff --staged --quiet; then
             echo "没有新的变更"
           else
-            git commit -m "Sync LeetCode submissions [skip ci]"
+            git commit -m "Sync LeetCode submissions"
             git push
           fi
